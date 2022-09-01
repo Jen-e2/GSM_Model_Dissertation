@@ -1,0 +1,312 @@
+model "GSM"
+  uses "mmxprs"
+  uses "mmsystem"
+  uses "mmnl"
+  uses "mmxnlp"
+
+!-----------------DECLARATIONS----------------------------
+
+  declarations
+    p: integer
+    filename: string
+    nets: boolean
+  end-declarations
+
+  initializations from "bin:shmem:AS2"
+    p as "demand_node_net_choice"
+    filename as "filename"
+    nets as "net_value_choice"
+  end-initializations
+
+  declarations
+      !Number of Nodes
+    nbNodes: integer
+  end-declarations
+
+  initialisations from filename
+    nbNodes
+  end-initialisations
+
+  declarations
+    !Number of Nodes
+    N = 1..nbNodes
+
+    !Array of 1's where there is an arc between two nodes
+    Arcs: array(N,N) of integer
+
+    !List of demand nodes
+    Demand_Nodes: array(N) of integer
+
+    !Lead Time
+    L: array(N) of real
+    L_downinc: array(N) of real
+    L_uniform: array(N) of real
+    L_downdec: array(N) of real
+
+    !Maximum relplenishment time
+    max_time_downdec: array(N) of real
+    max_time_downinc: array(N) of real
+    max_time_uniform: array(N) of real
+
+
+    !Scalar number of units need from upstream stage
+    phi: array(N,N) of real
+
+    !mean demand at each stage
+    mu: array(N) of real
+
+    !sd demand at each stage
+    sd: array(N) of real
+
+    !Holding costs of stock
+    h: array(N) of real
+    h_downinc: array(N) of real
+    h_uniform: array(N) of real
+    h_downdec: array(N) of real
+
+    !Factor to calculate demand at nodes - each k refers to inverse cumulative on service
+    !i.e. k_90 = inverse(phi(0.90))
+    k: array(N) of real
+
+    k_50:	real
+    k_51:	real
+    k_52:	real
+    k_53:	real
+    k_54:	real
+    k_55:	real
+    k_56:	real
+    k_57:	real
+    k_58:	real
+    k_59:	real
+    k_60:	real
+    k_61:	real
+    k_62:	real
+    k_63:	real
+    k_64:	real
+    k_65:	real
+    k_66:	real
+    k_67:	real
+    k_68:	real
+    k_69:	real
+    k_70:	real
+    k_71:	real
+    k_72:	real
+    k_73:	real
+    k_74:	real
+    k_75:	real
+    k_76:	real
+    k_77:	real
+    k_78:	real
+    k_79:	real
+    k_80:	real
+    k_81:	real
+    k_82:	real
+    k_83:	real
+    k_84:	real
+    k_85:	real
+    k_86:	real
+    k_87:	real
+    k_88:	real
+    k_89:	real
+    k_90:	real
+    k_91:	real
+    k_92:	real
+    k_93:	real
+    k_94:	real
+    k_95:	real
+    k_96:	real
+    k_97:	real
+    k_98:	real
+    k_99:	real
+    k_999:	real
+
+    !Maximum allowed service time to fulfill demand at demand nodes
+    s: array(N) of integer
+
+    objective: real
+
+  end-declarations
+
+  initialisations from filename
+    phi Arcs mu s sd Demand_Nodes
+    L_downinc L_downdec L_uniform h_downinc h_downdec h_uniform 
+    L h
+  end-initialisations
+
+  initialisations from "k_factors.dat"
+    k_50	k_51	k_52	k_53	k_54	k_55	k_56	k_57	k_58	k_59	k_60	k_61	k_62	k_63
+    k_64	k_65	k_66	k_67	k_68	k_69	k_70	k_71	k_72	k_73	k_74	k_75	k_76	k_77
+    k_78	k_79	k_80	k_81	k_82	k_83	k_84	k_85	k_86	k_87	k_88	k_89	k_90	k_91
+    k_92	k_93	k_94	k_95	k_96	k_97	k_98	k_99	k_999
+  end-initialisations
+
+!--------------------DECISION VARIABLES---------------------------
+
+  declarations
+    !Guarenteed service time
+    S: array(N) of mpvar
+
+    !Inbound service time
+    SI: array(N) of mpvar
+
+    !Net replenishment time
+    net: array(N) of mpvar
+
+  end-declarations
+
+! ==================================================================================================
+! Parameters
+! ==================================================================================================
+
+  ! Set safety factors
+
+  !Safety factor for assembly example
+  if(filename = "GSM_real_assembly.dat") then
+    forall(j in N ) do
+      k(j):= k_95
+    end-do
+  !Safety Factor for serial example
+  elif(filename = "GSM_serial_5stage.dat") then
+    forall(j in N) do
+      k(j):= 2
+    end-do
+  ! Safety factor in general
+  else
+    forall(j in N | Demand_Nodes(j) = 1) do
+      k(j):= k_96 ! This needs to be chosen
+    end-do
+  end-if
+
+
+  ! Calculate the mean and standard deviation for all nodes using external customer demand parameter
+
+  forall(i in N | Demand_Nodes(i) = 0) do
+    mu(i) := sum(j in N | Arcs(i,j)=1) phi(i,j) * mu(j)
+    sd(i) := sqrt( sum(j in N | Arcs(i,j)=1) phi(i,j)*phi(i,j) * sd(j)*sd(j) ) !Works since all demand is independent
+  end-do
+
+  ! Set specified holding costs and lead times for assembly and serial problems respectively
+
+  if(filename = "GSM_real_assembly.dat") then
+    forall(j in N) h(j):= 0.3*h(j)
+  elif(filename = "GSM_serial_5stage.dat") then
+    forall(j in N) hh(j) := 0.35 * h_downinc(j)
+    L:= L_downdec
+    h:= hh
+  end-if
+
+! ==================================================================================================
+! Inventory
+! ==================================================================================================
+
+  ! Set values for base stock and safety stock
+
+  forall(j in N) do
+    B(j) := net(j)*mu(j) + k(j)*sd(j)*(sqrt(net(j)))
+    Safety_Stock(j) := k(j)*sd(j)*sqrt(net(j))
+  end-do
+
+
+
+! ==================================================================================================
+! Constraints
+! ==================================================================================================
+
+  !Define net replenishment time
+  forall(j in N) do
+    net(j) = SI(j) + L(j) - S(j)
+  end-do
+
+! Make sure all inbound times are greater than all guarenteed service times of upstream nodes of an arc
+forall(j in N, i in N | Arcs(i,j) = 1) do
+  SI(j) >= S(i)
+end-do
+
+! GS time at demand nodes is no greater than maximum allowed time
+forall(j in N | Demand_Nodes(j) = 1) do
+  S(j) <= s(j)
+end-do
+
+! Decision variables are non-negative and integer
+forall(j in N) do
+  SI(j) >= 0
+  SI(j) is_integer
+  S(j) >= 0
+  S(j) is_integer
+  net(j) >= 0
+  net(j) is_integer
+end-do
+
+
+
+
+! ==================================================================================================
+! Objective Function
+! ==================================================================================================
+
+net(1) = p
+
+obj:= sum(j in N) h(j)*Safety_Stock(j)
+
+
+
+
+
+
+
+! !------------------------------------------------------------------------
+start_time := gettime
+minimise(obj)
+end_time:= gettime - start_time
+
+  procedure print_status
+
+   declarations
+      status: string
+   end-declarations
+
+   case getprobstat of
+    XPRS_OPT: status:="Optimum found"
+    XPRS_UNF: status:="Unfinished"
+    XPRS_INF: status:="Infeasible"
+    XPRS_UNB: status:="Unbounded"
+    XPRS_OTH: status:="Failed"
+    else status:="???"
+   end-case
+
+   writeln("Problem status: ", status)
+  end-procedure
+
+if (getprobstat <> 2) then
+  objective := MAX_REAL
+else objective:= getobjval
+end-if
+
+
+probstat := getprobstat
+
+initializations to "bin:shmem:AS2"
+  objective as "Total_Cost"
+  probstat as "ProblemStatus"
+end-initializations
+
+
+!-----------------------PRINT--------------------------------------
+
+if(nets = TRUE) then
+  writeln;
+  print_status
+  writeln;
+  writeln("Time taken for best solution: ", getsol(end_time)); writeln
+  writeln("Net replenishment times:"); writeln
+  forall(j in N) writeln(getsol(net(j))); writeln
+  writeln("Guaranteed Service Times:"); writeln
+  forall(j in N) writeln(getsol(S(j))); writeln
+  writeln("Safety Stock:"); writeln
+  forall(j in N) writeln(getsol(Safety_Stock(j)));writeln
+  writeln("Cost:")
+  writeln(getobjval);
+end-if
+
+
+end-model

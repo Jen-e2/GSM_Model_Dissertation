@@ -1,0 +1,160 @@
+model "GSM"
+  uses "mmxprs","mmsystem","mmjobs", "mmnl", "mmxnlp"
+
+forward function solveGSM(p: integer, nets: boolean, filename: string) : real
+
+filename:= "GSM_real_assembly.dat"
+! filename:= "GSM_serial_5stage.dat"
+
+  declarations
+      !Number of Nodes
+    nbNodes: integer
+  end-declarations
+
+  initialisations from filename
+    nbNodes
+  end-initialisations
+
+  declarations
+    !Number of Nodes
+    N = 1..nbNodes
+
+    !Lead Time
+    L: array(N) of integer
+    L_downinc: array(N) of integer
+    L_uniform: array(N) of integer
+    L_downdec: array(N) of integer
+
+    s: array(N) of integer
+  end-declarations
+
+  initialisations from filename
+    L_downinc L_downdec L_uniform
+    L
+    s
+  end-initialisations
+
+! ==================================================================================================
+! Looking for Global Optimal
+! ==================================================================================================
+
+!Change for serial depending on which lead time we are investigating
+if(filename = "GSM_serial_5stage.dat") then
+  Lower:= L_downdec(1) - s(1)
+elif(filename = "GSM_real_assembly.dat") then
+  Lower:= L(1) - s(1)
+end-if
+
+if(filename = "GSM_serial_5stage.dat") then
+  Upper:= 100
+elif(filename = "GSM_real_assembly.dat") then
+  Upper:= 52
+end-if
+
+
+
+!Set initial Parameters
+p := maxlist(0,Lower)
+
+
+!Filename needs to be set within the function, and certain parameters need to be updated to allow the
+!for the exact example to run
+
+! Use the sets below when calculating cost as we move through
+starttime := timestamp
+best_cost:= MAX_REAL
+
+! Iterate as long as we can improve the solution
+while(p <= Upper) do
+
+  !Print iteration counter
+  writeln;writeln("Net at demand node is: ", p)
+
+
+  ! ------------------------------------------------------------------------------------------------
+  ! Explore the exchange neighbourhood
+  ! ------------------------------------------------------------------------------------------------
+  cost := solveGSM(p, FALSE, filename)
+
+  writeln("with cost: ",cost)
+  writeln(cost)
+
+  if(cost < best_cost) then
+    ! Save cost and set flag
+    best_cost:= cost
+    net_time:= p
+    writeln("Improved cost: ", best_cost, " at p: ",net_time)
+  end-if
+  p += 1
+  writeln("----------------------------------------------")
+
+end-do
+
+endtime:= timestamp - starttime
+
+writeln; writeln("Best cost: ", best_cost, " at p: ",net_time)
+writeln; writeln("Time taken to find best solution: ", endtime, " seconds")
+writeln
+writeln("----------------------------------------------")
+
+results:= solveGSM(net_time, TRUE, filename)
+
+
+
+
+
+!-------------------solveGSM Function------------------------------------------------
+
+
+function solveGSM(p: integer, nets: boolean, filename: string) : real
+  declarations
+    ! Define the model to be called
+    AS2: Model
+  end-declarations
+
+  ! Initialise the return value to +Infinity
+  returned := MAX_REAL
+
+  ! Write data into memory
+  initializations to "bin:shmem:AS2"
+    p as "demand_node_net_choice"
+    nets as "net_value_choice"
+    filename as "filename"
+  end-initializations
+
+  ! Compile and run the CWLP model
+  ! ----------------------------------------------------------------------------
+  r := compile("solveGSM.mos")
+  load(AS2, "solveGSM.bim")
+  run(AS2)
+  wait
+  dropnextevent
+  unload(AS2)
+
+  ! Read the results from the main memory
+  ! ----------------------------------------------------------------------------
+  total_cost := 0.0
+  probstat := 0
+  forall(j in N) net_values(j) := 0.0
+
+  initializations from "bin:shmem:AS2"
+    probstat as "ProblemStatus"
+    cost as "Total_Cost"
+  end-initializations
+
+  ! Check the solution status and save total cost in 'returned'
+  if(probstat = XPRS_OPT) then
+    returned := total_cost
+  elif(probstat = XPRS_INF) then
+    writeln("The solution is infeasible!")
+  else
+    writeln("Some other problem occured. The Xpress code is: ", probstat)
+  end-if
+  returned := cost
+  writeln
+end-function
+
+
+
+
+end-model
